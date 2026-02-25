@@ -1,0 +1,16 @@
+# Foundry
+cache/
+out/
+broadcast/
+
+# Git
+.git/
+
+# Node (if any tooling)
+node_modules/
+
+# Snapshots (local Anvil state)
+snapshots/*.json
+
+# Environment
+.env

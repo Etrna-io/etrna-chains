@@ -243,7 +243,7 @@ contract DeployAll is Script {
         // ═══════════════════════════════════════════════════════════════════
         MeshHub meshHub = new MeshHub(admin);
         EtrnaMeshOriginSettler originSettler = new EtrnaMeshOriginSettler(address(meshHub));
-        EtrnaMeshDestinationSettler destSettler = new EtrnaMeshDestinationSettler(address(meshHub));
+        EtrnaMeshDestinationSettler destSettler = new EtrnaMeshDestinationSettler(address(meshHub), admin);
         EtrnaIntentRouter intentRouter = new EtrnaIntentRouter(address(meshHub), address(idGuard));
 
         // Transfer Ownable ownership to admin
