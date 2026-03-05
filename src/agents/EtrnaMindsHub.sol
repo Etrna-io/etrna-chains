@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import {AccessControl}   from "openzeppelin-contracts/access/AccessControl.sol";
 import {ReentrancyGuard} from "openzeppelin-contracts/security/ReentrancyGuard.sol";
+import {SafeCast} from "openzeppelin-contracts/utils/math/SafeCast.sol";
 
 import {EtrnaErrors} from "../lib/EtrnaErrors.sol";
 
@@ -30,6 +31,8 @@ import {EtrnaErrors} from "../lib/EtrnaErrors.sol";
  * ---------------------------------------------------------------------------
  */
 contract EtrnaMindsHub is AccessControl, ReentrancyGuard {
+    using SafeCast for uint256;
+
     // ─── Roles ──────────────────────────────────────────────────────────
     bytes32 public constant ADMIN_ROLE        = keccak256("ADMIN_ROLE");
     bytes32 public constant ORCHESTRATOR_ROLE = keccak256("ORCHESTRATOR_ROLE");
@@ -113,6 +116,9 @@ contract EtrnaMindsHub is AccessControl, ReentrancyGuard {
 
     event ComputeCreditsDeposited(address indexed agent, uint256 amount);
 
+    event DisputeResolved(uint256 indexed taskId, bool approved);
+    event AgentDeregistered(address indexed agent);
+
     // ─── Constructor ────────────────────────────────────────────────────
     constructor(address admin) {
         if (admin == address(0)) revert EtrnaErrors.ZeroAddress();
@@ -136,6 +142,7 @@ contract EtrnaMindsHub is AccessControl, ReentrancyGuard {
         uint256   stakeAmount,
         bytes32[] calldata capabilities
     ) external nonReentrant {
+        if (msg.sender == address(0)) revert EtrnaErrors.ZeroAddress();
         if (name == bytes32(0)) revert EtrnaErrors.InvalidInput();
         if (stakeAmount < minStake) revert EtrnaErrors.InsufficientStake();
         if (capabilities.length == 0) revert EtrnaErrors.InvalidInput();
@@ -181,6 +188,19 @@ contract EtrnaMindsHub is AccessControl, ReentrancyGuard {
         if (a.registeredAt == 0) revert EtrnaErrors.NotFound();
         a.status = AgentStatus.RETIRED;
         emit AgentStatusChanged(msg.sender, AgentStatus.RETIRED);
+    }
+
+    /**
+     * @notice Admin deregisters an agent by marking it INACTIVE.
+     *         The agent is NOT removed from the registeredAgents array (gas cost)
+     *         but is effectively disabled.
+     * @param agent The address of the agent to deregister
+     */
+    function deregisterAgent(address agent) external onlyRole(ADMIN_ROLE) {
+        AgentProfile storage a = agents[agent];
+        if (a.registeredAt == 0) revert EtrnaErrors.NotFound();
+        a.status = AgentStatus.INACTIVE;
+        emit AgentDeregistered(agent);
     }
 
     function depositComputeCredits(uint256 amount) external nonReentrant {
@@ -266,7 +286,7 @@ contract EtrnaMindsHub is AccessControl, ReentrancyGuard {
             totalReward += t.rewardPerAgent;
 
             // Reputation boost (clamped to 10000)
-            int256 newRep = a.reputationBps + int256(uint256(reputationBoostBps));
+            int256 newRep = a.reputationBps + reputationBoostBps.toInt256();
             if (newRep > 10000) newRep = 10000;
             a.reputationBps = newRep;
             emit AgentReputationUpdated(t.assignedAgents[i], newRep);
@@ -303,6 +323,64 @@ contract EtrnaMindsHub is AccessControl, ReentrancyGuard {
         emit TaskDisputed(taskId, msg.sender);
     }
 
+    /**
+     * @notice Resolve a disputed task. Admin decides whether to complete or fail it.
+     * @param taskId The task to resolve
+     * @param approve True = mark as COMPLETED and distribute rewards; false = mark as FAILED and slash agents
+     */
+    function resolveDispute(
+        uint256 taskId,
+        bool    approve
+    ) external onlyRole(ADMIN_ROLE) nonReentrant {
+        TaskEntry storage t = tasks[taskId];
+        if (t.creator == address(0)) revert EtrnaErrors.NotFound();
+        if (t.status != TaskStatus.DISPUTED) revert EtrnaErrors.InvalidState();
+
+        if (approve) {
+            _resolveDisputeApproved(taskId, t);
+        } else {
+            _resolveDisputeRejected(taskId, t);
+        }
+
+        emit DisputeResolved(taskId, approve);
+    }
+
+    function _resolveDisputeApproved(uint256 taskId, TaskEntry storage t) internal {
+        t.status      = TaskStatus.COMPLETED;
+        t.completedAt = uint64(block.timestamp);
+
+        uint256 totalReward;
+        uint256 rewardPerAgent = t.rewardPerAgent;
+        uint256 boostBps = reputationBoostBps;
+
+        for (uint256 i; i < t.assignedAgents.length; i++) {
+            address agent = t.assignedAgents[i];
+            AgentProfile storage profile = agents[agent];
+
+            profile.successCount++;
+            profile.totalRewardsEarned += rewardPerAgent;
+            totalReward += rewardPerAgent;
+
+            int256 newReputation = profile.reputationBps + boostBps.toInt256();
+            if (newReputation > 10000) newReputation = 10000;
+            profile.reputationBps = newReputation;
+
+            emit AgentReputationUpdated(agent, newReputation);
+        }
+
+        emit TaskCompleted(taskId, t.resultHash, totalReward);
+    }
+
+    function _resolveDisputeRejected(uint256 taskId, TaskEntry storage t) internal {
+        t.status = TaskStatus.FAILED;
+
+        for (uint256 i; i < t.assignedAgents.length; i++) {
+            _slashAgent(t.assignedAgents[i], "dispute resolved: failed");
+        }
+
+        emit TaskFailed(taskId, "dispute resolved: failed");
+    }
+
     // ═══════════════════════════════════════════════════════════════════
     //  SLASHING
     // ═══════════════════════════════════════════════════════════════════
@@ -320,7 +398,7 @@ contract EtrnaMindsHub is AccessControl, ReentrancyGuard {
         a.failCount++;
 
         // Reputation penalty (–2× boost per failure)
-        int256 penalty = -int256(uint256(reputationBoostBps)) * 2;
+        int256 penalty = -reputationBoostBps.toInt256() * 2;
         int256 newRep  = a.reputationBps + penalty;
         if (newRep < 0) newRep = 0;
         a.reputationBps = newRep;

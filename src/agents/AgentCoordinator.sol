@@ -31,6 +31,10 @@ contract AgentCoordinator is AccessControl, ReentrancyGuard {
     bytes32 public constant ORCHESTRATOR_ROLE = keccak256("ORCHESTRATOR_ROLE");
     bytes32 public constant ARBITER_ROLE      = keccak256("ARBITER_ROLE");
 
+    // ─── Limits ─────────────────────────────────────────────────────────
+    uint256 public constant MAX_AGENTS_PER_COLLAB = 20;
+    uint256 public constant MAX_TEAM_MEMBERS      = 50;
+
     // ─── Enums ──────────────────────────────────────────────────────────
     enum CollaborationMode {
         SEQUENTIAL,
@@ -136,6 +140,10 @@ contract AgentCoordinator is AccessControl, ReentrancyGuard {
         if (name == bytes32(0)) revert EtrnaErrors.InvalidInput();
         if (members.length == 0) revert EtrnaErrors.InvalidInput();
 
+        for (uint256 i; i < members.length; i++) {
+            require(members[i] != address(0), "AC: zero address");
+        }
+
         teamId = ++nextTeamId;
         teams[teamId] = Team({
             teamId: teamId,
@@ -154,6 +162,10 @@ contract AgentCoordinator is AccessControl, ReentrancyGuard {
         if (t.lead != msg.sender) revert EtrnaErrors.Unauthorized();
         if (t.status != TeamStatus.ACTIVE) revert EtrnaErrors.InvalidState();
         if (member == address(0)) revert EtrnaErrors.ZeroAddress();
+        require(t.members.length < MAX_TEAM_MEMBERS, "AC: team full");
+        for (uint256 i; i < t.members.length; i++) {
+            require(t.members[i] != member, "AC: duplicate member");
+        }
         t.members.push(member);
         emit MemberAdded(teamId, member);
     }
@@ -178,6 +190,8 @@ contract AgentCoordinator is AccessControl, ReentrancyGuard {
         uint64              deadline,
         uint16              consensusThresholdBps
     ) external nonReentrant returns (uint256 collabId) {
+        require(agentAddrs.length > 0, "AC: no agents");
+        require(agentAddrs.length <= MAX_AGENTS_PER_COLLAB, "AC: too many agents");
         if (intentHash == bytes32(0)) revert EtrnaErrors.InvalidInput();
         if (agentAddrs.length < 2) revert EtrnaErrors.InvalidInput(); // need ≥ 2 agents
         if (budgetVibe == 0) revert EtrnaErrors.InvalidInput();

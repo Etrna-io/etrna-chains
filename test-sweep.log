@@ -1,0 +1,16 @@
+RUN test/CivilizationUpgrade.t.sol
+PASS test/CivilizationUpgrade.t.sol
+RUN test/CommunityEconomyRouter.t.sol
+PASS test/CommunityEconomyRouter.t.sol
+RUN test/CommunityPass.t.sol
+PASS test/CommunityPass.t.sol
+RUN test/CommunityTaskRegistry.t.sol
+PASS test/CommunityTaskRegistry.t.sol
+RUN test/EtrnaIntentRouter.t.sol
+PASS test/EtrnaIntentRouter.t.sol
+RUN test/Etrnal.t.sol
+PASS test/Etrnal.t.sol
+RUN test/EtrnaMusic.t.sol
+PASS test/EtrnaMusic.t.sol
+RUN test/EtrnaPass.t.sol
+FAIL test/EtrnaPass.t.sol

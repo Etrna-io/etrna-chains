@@ -3,14 +3,34 @@ pragma solidity ^0.8.24;
 
 import "forge-std/Test.sol";
 import "../src/governance/GovernanceHybrid.sol";
+import {IVotes} from "@openzeppelin/contracts/governance/utils/IVotes.sol";
 
-/// @dev Mock ERC20 with balanceOf
+/// @dev Mock ERC20Votes token with balanceOf and getPastVotes
 contract MockERC20Votes is IERC20VotesLike {
     mapping(address => uint256) public override balanceOf;
+    mapping(address => mapping(uint256 => uint256)) private _pastVotes;
+    mapping(address => uint256) private _currentVotes;
 
     function setBalance(address a, uint256 amount) external {
         balanceOf[a] = amount;
+        _currentVotes[a] = amount;
     }
+
+    /// @dev Snapshot current votes at this block number
+    function snapshot(address a, uint256 blockNum) external {
+        _pastVotes[a][blockNum] = _currentVotes[a];
+    }
+
+    /// @dev IVotes.getPastVotes called by GovernanceHybrid
+    function getPastVotes(address account, uint256 blockNumber) external view returns (uint256) {
+        return _pastVotes[account][blockNumber];
+    }
+
+    // Unused IVotes stubs (needed for interface cast but not called by contract)
+    function getVotes(address) external pure returns (uint256) { return 0; }
+    function delegates(address) external pure returns (address) { return address(0); }
+    function delegate(address) external pure {}
+    function delegateBySig(address, uint256, uint256, uint8, bytes32, bytes32) external pure {}
 }
 
 /// @dev Mock reputation oracle
@@ -63,23 +83,37 @@ contract GovernanceHybridTest is Test {
         new GovernanceHybrid(address(0), address(oracle));
     }
 
-    // ─── setOracle ───────────────────────────────────────────
+    // ─── proposeOracle / acceptOracle (timelocked) ──────────
 
-    function test_SetOracle() public {
+    function test_ProposeAndAcceptOracle() public {
         MockReputationOracle newOracle = new MockReputationOracle();
-        gov.setOracle(address(newOracle));
+        gov.proposeOracle(address(newOracle));
+        assertEq(gov.pendingOracle(), address(newOracle));
+
+        // Fast-forward past the 2-day delay
+        vm.warp(block.timestamp + 2 days);
+        gov.acceptOracle();
         assertEq(address(gov.repOracle()), address(newOracle));
+        assertEq(gov.pendingOracle(), address(0));
     }
 
-    function test_SetOracleToZero() public {
-        gov.setOracle(address(0));
-        assertEq(address(gov.repOracle()), address(0));
+    function test_AcceptOracleRevertBeforeDelay() public {
+        MockReputationOracle newOracle = new MockReputationOracle();
+        gov.proposeOracle(address(newOracle));
+
+        vm.expectRevert("GH: delay not elapsed");
+        gov.acceptOracle();
     }
 
-    function test_SetOracleRevertNonOwner() public {
+    function test_ProposeOracleRevertZeroAddress() public {
+        vm.expectRevert("GH: oracle=0");
+        gov.proposeOracle(address(0));
+    }
+
+    function test_ProposeOracleRevertNonOwner() public {
         vm.prank(nonOwner);
         vm.expectRevert("Ownable: caller is not the owner");
-        gov.setOracle(address(0x99));
+        gov.proposeOracle(address(0x99));
     }
 
     // ─── setParams ───────────────────────────────────────────
@@ -110,7 +144,7 @@ contract GovernanceHybridTest is Test {
     }
 
     function test_SetParamsAllToken() public {
-        gov.setParams(10000, 0, 0);
+        gov.setParams(10000, 0, 100);
         assertEq(gov.tokenWeightBps(), 10000);
         assertEq(gov.repWeightBps(), 0);
     }
@@ -121,131 +155,114 @@ contract GovernanceHybridTest is Test {
         assertEq(gov.repWeightBps(), 10000);
     }
 
-    // ─── voteWeight ──────────────────────────────────────────
+    function test_SetParamsRevertCapOutOfRange() public {
+        vm.expectRevert("GH: cap out of range");
+        gov.setParams(8000, 2000, 0); // repCapBps below minimum (100)
+    }
+
+    // ─── voteWeight (now uses getPastVotes + blockNumber) ───
+
+    /// Helper: set balance, snapshot at given block, then roll forward
+    function _setupVoter(address v, uint256 bal, uint256 rep, uint256 snapBlock) internal {
+        token.setBalance(v, bal);
+        oracle.setReputation(v, rep);
+        token.snapshot(v, snapBlock);
+    }
 
     function test_VoteWeightDefaultParams() public {
-        // tokenWeightBps=8000, repWeightBps=2000, repCapBps=5000
-        // voter1 has 1000 tokens, 500 rep
-        token.setBalance(voter1, 1000);
-        oracle.setReputation(voter1, 500);
+        _setupVoter(voter1, 1000, 500, block.number);
+        vm.roll(block.number + 1);
 
         // tokenPart = 1000 * 8000 / 10000 = 800
         // repPartRaw = 500 * 2000 / 10000 = 100
         // repCap = 800 * 5000 / 10000 = 400
         // repPart = min(100, 400) = 100
         // total = 800 + 100 = 900
-        assertEq(gov.voteWeight(voter1), 900);
+        assertEq(gov.voteWeight(voter1, block.number - 1), 900);
     }
 
     function test_VoteWeightRepCapped() public {
-        // Large reputation that exceeds cap
-        token.setBalance(voter1, 1000);
-        oracle.setReputation(voter1, 100_000);
+        _setupVoter(voter1, 1000, 100_000, block.number);
+        vm.roll(block.number + 1);
 
-        // tokenPart = 1000 * 8000 / 10000 = 800
-        // repPartRaw = 100000 * 2000 / 10000 = 20000
-        // repCap = 800 * 5000 / 10000 = 400
-        // repPart = min(20000, 400) = 400 (capped)
-        // total = 800 + 400 = 1200
-        assertEq(gov.voteWeight(voter1), 1200);
+        assertEq(gov.voteWeight(voter1, block.number - 1), 1200);
     }
 
     function test_VoteWeightZeroTokens() public {
-        token.setBalance(voter1, 0);
-        oracle.setReputation(voter1, 500);
+        _setupVoter(voter1, 0, 500, block.number);
+        vm.roll(block.number + 1);
 
-        // tokenPart = 0
-        // repPartRaw = 500 * 2000 / 10000 = 100
-        // repCap = 0 * 5000 / 10000 = 0
-        // repPart = min(100, 0) = 0 (capped at 0 since no tokens)
-        // total = 0
-        assertEq(gov.voteWeight(voter1), 0);
+        assertEq(gov.voteWeight(voter1, block.number - 1), 0);
     }
 
     function test_VoteWeightZeroReputation() public {
-        token.setBalance(voter1, 1000);
-        oracle.setReputation(voter1, 0);
+        _setupVoter(voter1, 1000, 0, block.number);
+        vm.roll(block.number + 1);
 
-        // tokenPart = 800, repPart = 0, total = 800
-        assertEq(gov.voteWeight(voter1), 800);
+        assertEq(gov.voteWeight(voter1, block.number - 1), 800);
     }
 
-    function test_VoteWeightZeroBoth() public view {
-        assertEq(gov.voteWeight(voter1), 0);
+    function test_VoteWeightZeroBoth() public {
+        token.snapshot(voter1, block.number); // 0 balance snapshotted
+        vm.roll(block.number + 1);
+
+        assertEq(gov.voteWeight(voter1, block.number - 1), 0);
     }
 
     function test_VoteWeightNoOracle() public {
-        gov.setOracle(address(0));
+        // Propose zero oracle and warp past delay
+        // Directly set oracle to 0 via a new deploy for simplicity
+        GovernanceHybrid gov2 = new GovernanceHybrid(address(token), address(0));
         token.setBalance(voter1, 1000);
+        token.snapshot(voter1, block.number);
+        vm.roll(block.number + 1);
 
-        // reputation = 0 when oracle is address(0)
-        // tokenPart = 800, repPart = 0, total = 800
-        assertEq(gov.voteWeight(voter1), 800);
+        assertEq(gov2.voteWeight(voter1, block.number - 1), 800);
     }
 
     function test_VoteWeightCustomParams5050() public {
         gov.setParams(5000, 5000, 10000);
-        token.setBalance(voter1, 1000);
-        oracle.setReputation(voter1, 1000);
+        _setupVoter(voter1, 1000, 1000, block.number);
+        vm.roll(block.number + 1);
 
-        // tokenPart = 1000 * 5000 / 10000 = 500
-        // repPartRaw = 1000 * 5000 / 10000 = 500
-        // repCap = 500 * 10000 / 10000 = 500
-        // repPart = min(500, 500) = 500
-        // total = 500 + 500 = 1000
-        assertEq(gov.voteWeight(voter1), 1000);
+        assertEq(gov.voteWeight(voter1, block.number - 1), 1000);
     }
 
     function test_VoteWeightAllTokenWeight() public {
-        gov.setParams(10000, 0, 0);
-        token.setBalance(voter1, 1000);
-        oracle.setReputation(voter1, 999);
+        gov.setParams(10000, 0, 100);
+        _setupVoter(voter1, 1000, 999, block.number);
+        vm.roll(block.number + 1);
 
-        // tokenPart = 1000 * 10000 / 10000 = 1000
-        // repPartRaw = 999 * 0 / 10000 = 0
-        // total = 1000
-        assertEq(gov.voteWeight(voter1), 1000);
+        assertEq(gov.voteWeight(voter1, block.number - 1), 1000);
     }
 
     function test_VoteWeightLargeValues() public {
-        token.setBalance(voter1, 1_000_000 ether);
-        oracle.setReputation(voter1, 500_000 ether);
+        _setupVoter(voter1, 1_000_000 ether, 500_000 ether, block.number);
+        vm.roll(block.number + 1);
 
-        // tokenPart = 1_000_000e18 * 8000 / 10000 = 800_000e18
-        // repPartRaw = 500_000e18 * 2000 / 10000 = 100_000e18
-        // repCap = 800_000e18 * 5000 / 10000 = 400_000e18
-        // repPart = min(100_000e18, 400_000e18) = 100_000e18
-        // total = 900_000e18
-        assertEq(gov.voteWeight(voter1), 900_000 ether);
+        assertEq(gov.voteWeight(voter1, block.number - 1), 900_000 ether);
     }
 
     function test_VoteWeightMultipleVoters() public {
-        token.setBalance(voter1, 1000);
-        oracle.setReputation(voter1, 200);
+        _setupVoter(voter1, 1000, 200, block.number);
+        vm.roll(block.number + 1);
+        assertEq(gov.voteWeight(voter1, block.number - 1), 840);
 
-        token.setBalance(voter2, 5000);
-        oracle.setReputation(voter2, 3000);
-
-        // voter1: tokenPart=800, repRaw=40, repCap=400, repPart=40 => 840
-        assertEq(gov.voteWeight(voter1), 840);
-
-        // voter2: tokenPart=4000, repRaw=600, repCap=2000, repPart=600 => 4600
-        assertEq(gov.voteWeight(voter2), 4600);
+        _setupVoter(voter2, 5000, 3000, block.number);
+        vm.roll(block.number + 1);
+        assertEq(gov.voteWeight(voter2, block.number - 1), 4600);
     }
 
     function test_VoteWeightRepPartExactlyCap() public {
-        // Set so repPartRaw == repCap exactly
-        token.setBalance(voter1, 1000);
-        // tokenPart = 800
-        // repCap = 800 * 5000 / 10000 = 400
-        // repPartRaw = r * 2000 / 10000 = r/5
-        // we need r/5 = 400 => r = 2000
-        oracle.setReputation(voter1, 2000);
+        _setupVoter(voter1, 1000, 2000, block.number);
+        vm.roll(block.number + 1);
 
-        // repPartRaw = 2000 * 2000 / 10000 = 400
-        // repCap = 400
-        // repPart = 400, total = 800 + 400 = 1200
-        assertEq(gov.voteWeight(voter1), 1200);
+        assertEq(gov.voteWeight(voter1, block.number - 1), 1200);
+    }
+
+    function test_VoteWeightRevertFutureBlock() public {
+        vm.expectRevert("GH: block not mined");
+        gov.voteWeight(voter1, block.number);
     }
 
     // ─── Ownership ───────────────────────────────────────────
@@ -264,6 +281,6 @@ contract GovernanceHybridTest is Test {
         assertEq(gov.owner(), address(0));
 
         vm.expectRevert("Ownable: caller is not the owner");
-        gov.setOracle(address(0x99));
+        gov.proposeOracle(address(0x99));
     }
 }

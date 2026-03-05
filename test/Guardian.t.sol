@@ -44,26 +44,46 @@ contract FeeVaultTest is Test {
         new FeeVault(address(0));
     }
 
-    // ─── setOwner ─────────────────────────────────────────────
+    // ─── transferOwnership / acceptOwnership ─────────────────
 
-    function test_SetOwner() public {
+    function test_TransferOwnership() public {
         vm.prank(admin);
+        vm.expectEmit(true, true, false, false);
+        emit FeeVault.OwnershipTransferStarted(admin, alice);
+        vault.transferOwnership(alice);
+
+        // Owner hasn't changed yet
+        assertEq(vault.owner(), admin);
+        assertEq(vault.pendingOwner(), alice);
+
+        // Alice accepts
+        vm.prank(alice);
         vm.expectEmit(true, false, false, false);
         emit FeeVault.OwnerUpdated(alice);
-        vault.setOwner(alice);
+        vault.acceptOwnership();
         assertEq(vault.owner(), alice);
+        assertEq(vault.pendingOwner(), address(0));
     }
 
-    function test_RevertSetOwner_NotOwner() public {
+    function test_RevertTransferOwnership_NotOwner() public {
         vm.prank(alice);
         vm.expectRevert(bytes("NOT_OWNER"));
-        vault.setOwner(alice);
+        vault.transferOwnership(alice);
     }
 
-    function test_RevertSetOwner_Zero() public {
+    function test_RevertTransferOwnership_Zero() public {
         vm.prank(admin);
         vm.expectRevert(bytes("BAD_OWNER"));
-        vault.setOwner(address(0));
+        vault.transferOwnership(address(0));
+    }
+
+    function test_RevertAcceptOwnership_NotPending() public {
+        vm.prank(admin);
+        vault.transferOwnership(alice);
+
+        vm.prank(operator1); // wrong address
+        vm.expectRevert(bytes("NOT_PENDING_OWNER"));
+        vault.acceptOwnership();
     }
 
     // ─── setOperator ──────────────────────────────────────────

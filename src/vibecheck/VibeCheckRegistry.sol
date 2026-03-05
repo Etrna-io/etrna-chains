@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
-import "@openzeppelin/contracts/proxy/utils/Initializable.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 
 /**
  * @title  VibeCheckRegistry
@@ -14,7 +14,7 @@ import "@openzeppelin/contracts/access/Ownable.sol";
  *
  *         All string IDs are keccak256-hashed off-chain before submission.
  */
-contract VibeCheckRegistry is Initializable, UUPSUpgradeable, Ownable {
+contract VibeCheckRegistry is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     // ─── Types ──────────────────────────────────────────────────────────
     enum VerifyStatus {
         Unverified,   // 0
@@ -84,7 +84,8 @@ contract VibeCheckRegistry is Initializable, UUPSUpgradeable, Ownable {
     }
 
     function initialize() external initializer {
-        _transferOwnership(msg.sender);
+        __Ownable_init();
+        __UUPSUpgradeable_init();
     }
 
     // ─── Check-In Operations ────────────────────────────────────────────
@@ -213,6 +214,9 @@ contract VibeCheckRegistry is Initializable, UUPSUpgradeable, Ownable {
         MusicRating storage mr = _musicRatings[ratingId];
         return (mr.checkInId, mr.user, mr.rating, mr.nowPlayingHash, mr.timestamp);
     }
+
+    // ─── Storage Gap (upgrade-safe) ──────────────────────────────────────
+    uint256[50] private __gap;
 
     // ─── UUPS Upgrade Auth ──────────────────────────────────────────────
     function _authorizeUpgrade(address) internal override onlyOwner {}

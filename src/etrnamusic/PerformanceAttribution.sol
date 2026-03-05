@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {AccessControl} from "openzeppelin-contracts/access/AccessControl.sol";
+import {SafeCast} from "openzeppelin-contracts/utils/math/SafeCast.sol";
 
 import {EtrnaErrors} from "../lib/EtrnaErrors.sol";
 import {EtrnaMusicTypes} from "./EtrnaMusicTypes.sol";
@@ -22,6 +23,8 @@ import {CulturalSignalRegistry} from "./CulturalSignalRegistry.sol";
  * - Parameters (splits, community pool) are admin-governed.
  */
 contract PerformanceAttribution is AccessControl {
+    using SafeCast for uint256;
+
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 public constant SETTLEMENT_ROLE = keccak256("SETTLEMENT_ROLE");
 
@@ -142,60 +145,37 @@ contract PerformanceAttribution is AccessControl {
         // Require signal batch existence (anchored)
         uint256 batchId = signalRegistry.batchIdOf(setId, epoch);
         if (batchId == 0) revert EtrnaErrors.NotFound();
+        _emitSetRewards(setId, epoch, units, artistPayees, artistBps);
+        _storeSettlement(setId, epoch, units, meaningBps, batchId, attributionHash);
+
         (, , bytes32 signalHash, ) = signalRegistry.batches(batchId);
 
-        // Pull set data
-        (address dj, bytes32 venueId, , , , , , DJSetLedger.SetStatus status) = djSetLedger.sets(setId);
-        if (dj == address(0)) revert EtrnaErrors.NotFound();
-        if (status != DJSetLedger.SetStatus.Ended) revert EtrnaErrors.InvalidState();
+        emit SetAttributed(setId, epoch, units, meaningBps, batchId, signalHash, attributionHash);
 
-        // Venue must be active + verified for settlement eligibility in v1.
-        if (!venueRegistry.isActive(venueId)) revert EtrnaErrors.NotEnabled();
-        if (!venueRegistry.isVerified(venueId)) revert EtrnaErrors.NotEnabled();
+        // Mark set settled in ledger (requires SETTLEMENT_ROLE granted to this contract)
+        djSetLedger.markSettled(setId);
+    }
 
-        address venuePayout = venueRegistry.payoutAddressOf(venueId);
+    function _emitSetRewards(
+        uint256 setId,
+        uint64 epoch,
+        uint32 units,
+        address[] calldata artistPayees,
+        uint16[] calldata artistBps
+    ) internal {
+        (address dj, address venuePayout) = _loadSettlementParties(setId);
+        _validateArtistDistribution(artistPayees, artistBps);
+        _emitRewardAssignments(setId, epoch, units, artistPayees, artistBps, dj, venuePayout);
+    }
 
-        // Validate artist distribution
-        uint256 n = artistPayees.length;
-        if (n == 0 || n != artistBps.length) revert EtrnaErrors.InvalidInput();
-        if (n > 32) revert EtrnaErrors.InvalidInput(); // safety cap
-
-        uint256 sum;
-        for (uint256 i = 0; i < n; i++) {
-            if (artistPayees[i] == address(0)) revert EtrnaErrors.ZeroAddress();
-            sum += artistBps[i];
-        }
-        if (sum != EtrnaMusicTypes.MAX_BPS) revert EtrnaErrors.InvalidInput();
-
-        // Compute role buckets (units)
-        uint256 total = units;
-        uint256 artistUnits = (total * artistSplitBps) / EtrnaMusicTypes.MAX_BPS;
-        uint256 djUnits = (total * djSplitBps) / EtrnaMusicTypes.MAX_BPS;
-        uint256 venueUnits = (total * venueSplitBps) / EtrnaMusicTypes.MAX_BPS;
-        uint256 communityUnits = total - artistUnits - djUnits - venueUnits; // remainder
-
-        bytes32 refId = bytes32(setId);
-
-        // Emit artist unit assignments (remainder to final payee)
-        uint256 remaining = artistUnits;
-        for (uint256 i = 0; i < n; i++) {
-            uint256 u = (i == n - 1) ? remaining : (artistUnits * artistBps[i]) / EtrnaMusicTypes.MAX_BPS;
-            if (u > remaining) u = remaining;
-            remaining -= u;
-            emit RewardUnitsAssigned(PRODUCT_CODE, epoch, artistPayees[i], uint32(u), EtrnaMusicTypes.RewardRole.ARTIST, refId);
-        }
-
-        // Emit DJ / Venue / Community unit assignments
-        if (djUnits > 0) {
-            emit RewardUnitsAssigned(PRODUCT_CODE, epoch, dj, uint32(djUnits), EtrnaMusicTypes.RewardRole.DJ, refId);
-        }
-        if (venueUnits > 0) {
-            emit RewardUnitsAssigned(PRODUCT_CODE, epoch, venuePayout, uint32(venueUnits), EtrnaMusicTypes.RewardRole.VENUE, refId);
-        }
-        if (communityUnits > 0) {
-            emit RewardUnitsAssigned(PRODUCT_CODE, epoch, communityPool, uint32(communityUnits), EtrnaMusicTypes.RewardRole.COMMUNITY, refId);
-        }
-
+    function _storeSettlement(
+        uint256 setId,
+        uint64 epoch,
+        uint32 units,
+        int16 meaningBps,
+        uint256 batchId,
+        bytes32 attributionHash
+    ) internal {
         settlements[setId][epoch] = Settlement({
             exists: true,
             units: units,
@@ -203,10 +183,90 @@ contract PerformanceAttribution is AccessControl {
             signalBatchId: batchId,
             attributionHash: attributionHash
         });
+    }
 
-        emit SetAttributed(setId, epoch, units, meaningBps, batchId, signalHash, attributionHash);
+    function _loadSettlementParties(uint256 setId) internal view returns (address dj, address venuePayout) {
+        (, bytes32 venueId, , , , , , DJSetLedger.SetStatus status) = djSetLedger.sets(setId);
+        (dj, , , , , , , ) = djSetLedger.sets(setId);
+        if (dj == address(0)) revert EtrnaErrors.NotFound();
+        if (status != DJSetLedger.SetStatus.Ended) revert EtrnaErrors.InvalidState();
 
-        // Mark set settled in ledger (requires SETTLEMENT_ROLE granted to this contract)
-        djSetLedger.markSettled(setId);
+        if (!venueRegistry.isActive(venueId)) revert EtrnaErrors.NotEnabled();
+        if (!venueRegistry.isVerified(venueId)) revert EtrnaErrors.NotEnabled();
+
+        venuePayout = venueRegistry.payoutAddressOf(venueId);
+    }
+
+    function _validateArtistDistribution(address[] calldata artistPayees, uint16[] calldata artistBps) internal pure {
+        uint256 n = artistPayees.length;
+        if (n == 0 || n != artistBps.length) revert EtrnaErrors.InvalidInput();
+        if (n > 32) revert EtrnaErrors.InvalidInput();
+
+        uint256 sum;
+        for (uint256 i = 0; i < n; i++) {
+            if (artistPayees[i] == address(0)) revert EtrnaErrors.ZeroAddress();
+            sum += artistBps[i];
+        }
+        if (sum != EtrnaMusicTypes.MAX_BPS) revert EtrnaErrors.InvalidInput();
+    }
+
+    function _emitArtistUnits(
+        uint64 epoch,
+        uint256 artistUnits,
+        address[] calldata artistPayees,
+        uint16[] calldata artistBps,
+        bytes32 refId
+    ) internal {
+        uint256 n = artistPayees.length;
+        uint256 remaining = artistUnits;
+        for (uint256 i = 0; i < n; i++) {
+            uint256 unitAmount = (i == n - 1) ? remaining : (artistUnits * artistBps[i]) / EtrnaMusicTypes.MAX_BPS;
+            if (unitAmount > remaining) unitAmount = remaining;
+            remaining -= unitAmount;
+            emit RewardUnitsAssigned(
+                PRODUCT_CODE,
+                epoch,
+                artistPayees[i],
+                unitAmount.toUint32(),
+                EtrnaMusicTypes.RewardRole.ARTIST,
+                refId
+            );
+        }
+    }
+
+    function _emitRewardAssignments(
+        uint256 setId,
+        uint64 epoch,
+        uint32 units,
+        address[] calldata artistPayees,
+        uint16[] calldata artistBps,
+        address dj,
+        address venuePayout
+    ) internal {
+        uint256 totalUnits = units;
+        uint256 artistUnits = (totalUnits * artistSplitBps) / EtrnaMusicTypes.MAX_BPS;
+        uint256 djUnits = (totalUnits * djSplitBps) / EtrnaMusicTypes.MAX_BPS;
+        uint256 venueUnits = (totalUnits * venueSplitBps) / EtrnaMusicTypes.MAX_BPS;
+        uint256 communityUnits = totalUnits - artistUnits - djUnits - venueUnits;
+
+        bytes32 refId = bytes32(setId);
+        _emitArtistUnits(epoch, artistUnits, artistPayees, artistBps, refId);
+
+        if (djUnits > 0) {
+            emit RewardUnitsAssigned(PRODUCT_CODE, epoch, dj, djUnits.toUint32(), EtrnaMusicTypes.RewardRole.DJ, refId);
+        }
+        if (venueUnits > 0) {
+            emit RewardUnitsAssigned(PRODUCT_CODE, epoch, venuePayout, venueUnits.toUint32(), EtrnaMusicTypes.RewardRole.VENUE, refId);
+        }
+        if (communityUnits > 0) {
+            emit RewardUnitsAssigned(
+                PRODUCT_CODE,
+                epoch,
+                communityPool,
+                communityUnits.toUint32(),
+                EtrnaMusicTypes.RewardRole.COMMUNITY,
+                refId
+            );
+        }
     }
 }

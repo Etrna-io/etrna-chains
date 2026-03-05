@@ -58,7 +58,7 @@ contract TimeEscrow is AccessControl {
         if (redeemed[tokenId]) revert EtrnaErrors.InvalidState();
         if (rights.ownerOf(tokenId) != msg.sender) revert EtrnaErrors.Unauthorized();
 
-        (uint64 start, uint64 end, ) = rights.windows(tokenId);
+        (, uint64 end, ) = rights.windows(tokenId);
         if (block.timestamp < end) revert EtrnaErrors.Expired(); // using Expired error as "too early" sentinel in v0
 
         redeemed[tokenId] = true;

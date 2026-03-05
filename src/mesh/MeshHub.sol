@@ -30,11 +30,15 @@ contract MeshHub is Ownable, ReentrancyGuard {
 
     event IntentCompleted(bytes32 indexed intentId, bytes32 dstTxHash);
     event IntentFailed(bytes32 indexed intentId, string reason);
+    event EmergencyWithdraw(address indexed to, uint256 amount);
 
     mapping(bytes32 => MeshTypes.Intent) public intents;
 
     /// @notice chainId => actionSelector => adapter
     mapping(uint256 => mapping(bytes4 => address)) public adapters;
+
+    /// @notice Nonce to prevent intent ID collisions.
+    uint256 private _nonce;
 
     /// @notice Authorized off-chain router/relayer that can mark routing outcomes.
     address public routerBackend;
@@ -71,6 +75,7 @@ contract MeshHub is Ownable, ReentrancyGuard {
             srcChainId := chainid()
         }
 
+        _nonce++;
         bytes32 intentId = keccak256(
             abi.encodePacked(
                 msg.sender,
@@ -79,7 +84,8 @@ contract MeshHub is Ownable, ReentrancyGuard {
                 dstChainId,
                 asset,
                 amount,
-                paramsHash
+                paramsHash,
+                _nonce
             )
         );
         require(intents[intentId].creator == address(0), "MeshHub: duplicate intent");
@@ -121,13 +127,19 @@ contract MeshHub is Ownable, ReentrancyGuard {
     function markFailed(bytes32 intentId, string calldata reason) external onlyRouter {
         MeshTypes.Intent storage intent = intents[intentId];
         require(intent.creator != address(0), "MeshHub: unknown intent");
-        require(
-            intent.status == MeshTypes.IntentStatus.PENDING || intent.status == MeshTypes.IntentStatus.ROUTED,
-            "MeshHub: invalid state"
-        );
+        require(intent.status == MeshTypes.IntentStatus.ROUTED, "MeshHub: not routed");
 
         intent.status = MeshTypes.IntentStatus.FAILED;
         emit IntentFailed(intentId, reason);
+    }
+
+    /// @notice Allow owner to rescue ETH that would otherwise be permanently locked.
+    function emergencyWithdraw(address payable to, uint256 amount) external onlyOwner nonReentrant {
+        require(to != address(0), "MH: zero address");
+        require(amount <= address(this).balance, "MH: insufficient");
+        (bool ok,) = to.call{value: amount}("");
+        require(ok, "MH: withdraw failed");
+        emit EmergencyWithdraw(to, amount);
     }
 
     function getIntent(bytes32 intentId) external view returns (MeshTypes.Intent memory) {

@@ -20,7 +20,7 @@ contract IdentityGuard {
         registry = IdentityProviderRegistry(registryAddr);
     }
 
-    function requireProof(bytes32 proofType, bytes calldata proof, bytes32 nullifier) external view returns (bool) {
+    function requireProof(bytes32 proofType, bytes calldata proof, bytes32 nullifier) external pure returns (bool) {
         // For v1: assume off-chain verified and caller passed correct values.
         // Production: call verifier contract and validate proof+pubSignals.
         proofType; proof; nullifier;
@@ -35,7 +35,7 @@ contract IdentityGuard {
 
     /// @notice Policy-level identity check used by EtrnaIntentRouter.
     /// @dev v1: stub — always returns true. Production: verify policy constraints via registered providers.
-    function check(bytes32 policyId, address account, bytes calldata proof) external view returns (bool) {
+    function check(bytes32 policyId, address account, bytes calldata proof) external pure returns (bool) {
         policyId; account; proof;
         return true;
     }

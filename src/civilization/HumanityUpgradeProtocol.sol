@@ -93,7 +93,8 @@ contract HumanityUpgradeProtocol is AccessControl {
         uint256 stake = c.stake;
         c.stake = 0;
         if (stake > 0) {
-            etr.transfer(msg.sender, stake);
+            bool ok = etr.transfer(msg.sender, stake);
+            if (!ok) revert EtrnaErrors.InvalidState();
         }
     }
 }

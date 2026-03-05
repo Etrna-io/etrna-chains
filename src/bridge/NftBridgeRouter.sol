@@ -48,6 +48,7 @@ contract NftBridgeRouter is Ownable, ReentrancyGuard, Pausable {
     }
 
     function setAdapter(uint256 dstChainId, address adapter) external onlyOwner {
+        require(adapter != address(0), "NBR: zero adapter");
         adapterForChain[dstChainId] = adapter;
         emit AdapterSet(dstChainId, adapter);
     }
@@ -70,6 +71,8 @@ contract NftBridgeRouter is Ownable, ReentrancyGuard, Pausable {
         bytes32 uefMetadataHash,
         bytes calldata data
     ) external nonReentrant whenNotPaused returns (bytes32) {
+        require(nft != address(0), "NBR: zero nft address");
+        require(to != address(0), "NBR: zero recipient");
         require(clientRequestId != bytes32(0), "NftBridgeRouter: requestId=0");
         require(!consumedClientRequest[clientRequestId], "NftBridgeRouter: replay");
         consumedClientRequest[clientRequestId] = true;

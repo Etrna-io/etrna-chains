@@ -42,6 +42,7 @@ contract RewardsDistributor is AccessControl, ReentrancyGuard {
     // ─── Roles ──────────────────────────────────────────────────────────
     bytes32 public constant ADMIN_ROLE     = keccak256("ADMIN_ROLE");
     bytes32 public constant EXECUTOR_ROLE  = keccak256("EXECUTOR_ROLE");
+    uint256 public constant MAX_ALLOCATIONS_PER_EPOCH = 200;
 
     // ─── Structs ────────────────────────────────────────────────────────
     struct Allocation {
@@ -115,6 +116,8 @@ contract RewardsDistributor is AccessControl, ReentrancyGuard {
         if (epochExecuted[epochId]) revert EtrnaErrors.AlreadyExists();
         if (epochId <= lastEpochId) revert EtrnaErrors.InvalidInput();
         if (allocations.length == 0) revert EtrnaErrors.InvalidInput();
+        require(allocations.length <= MAX_ALLOCATIONS_PER_EPOCH, "RD: too many allocations");
+        require(allocations.length > 0, "RD: empty allocations");
 
         // ── Signature validation ──
         bytes32 digest = _epochDigest(epochId, allocations);

@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
-import "@openzeppelin/contracts/proxy/utils/Initializable.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 
 /**
  * @title  VibeCheckMissions
@@ -12,7 +12,7 @@ import "@openzeppelin/contracts/access/Ownable.sol";
  *         Tracks mission creation, user progress, completions, and
  *         reward allocations.  UUPS-upgradeable behind an ERC-1967 proxy.
  */
-contract VibeCheckMissions is Initializable, UUPSUpgradeable, Ownable {
+contract VibeCheckMissions is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     // ─── Types ──────────────────────────────────────────────────────────
     enum ProgressStatus {
         NotStarted,   // 0
@@ -75,7 +75,8 @@ contract VibeCheckMissions is Initializable, UUPSUpgradeable, Ownable {
     }
 
     function initialize() external initializer {
-        _transferOwnership(msg.sender);
+        __Ownable_init();
+        __UUPSUpgradeable_init();
     }
 
     // ─── Mission Lifecycle ──────────────────────────────────────────────
@@ -212,6 +213,9 @@ contract VibeCheckMissions is Initializable, UUPSUpgradeable, Ownable {
             && block.timestamp <= m.endAt
             && m.currentCompletions < m.maxCompletions;
     }
+
+    // ─── Storage Gap ────────────────────────────────────────────────────
+    uint256[50] private __gap;
 
     // ─── UUPS Upgrade Auth ──────────────────────────────────────────────
     function _authorizeUpgrade(address) internal override onlyOwner {}

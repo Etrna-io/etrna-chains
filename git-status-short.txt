@@ -1,0 +1,18 @@
+M  .gitmodules
+ M foundry.lock
+AM lib/openzeppelin-contracts-upgradeable
+ M remappings.txt
+ M src/agents/AgentCoordinator.sol
+ M src/agents/EtrnaMindsHub.sol
+ M src/agents/RewardsDistributor.sol
+ M src/bridge/NftBridgeRouter.sol
+ M src/governance/GovernanceHybrid.sol
+ M src/guardian/FeeVault.sol
+ M src/mesh/MeshHub.sol
+ M src/vibecheck/VibeCheckMissions.sol
+ M src/vibecheck/VibeCheckRegistry.sol
+ M test/GovernanceHybrid.t.sol
+ M test/Guardian.t.sol
+?? forge-errors.txt
+?? forge-full-build.txt
+

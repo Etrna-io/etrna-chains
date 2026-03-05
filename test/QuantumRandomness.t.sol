@@ -180,7 +180,7 @@ contract QuantumRandomnessTest is Test {
 
     function test_consumerRequestAndConsume() public {
         vm.prank(address(consumer));
-        bytes32 id = qr.requestRandomness();
+        qr.requestRandomness();
         // We need to use the consumer's doRequest which calls through the QR contract
         // Let's do full lifecycle through the consumer interface instead:
     }

@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {AccessControl} from "openzeppelin-contracts/access/AccessControl.sol";
+import {SafeCast} from "openzeppelin-contracts/utils/math/SafeCast.sol";
 
 import {EtrnaErrors} from "../lib/EtrnaErrors.sol";
 import {EtrnaMusicTypes} from "./EtrnaMusicTypes.sol";
@@ -19,6 +20,8 @@ import {EtrnaMusicTypes} from "./EtrnaMusicTypes.sol";
  * - Dispute workflows anchored to Reality Ledger
  */
 contract TrackRightsRegistry is AccessControl {
+    using SafeCast for uint256;
+
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 public constant TRACK_REGISTRAR_ROLE = keccak256("TRACK_REGISTRAR_ROLE");
 
@@ -115,7 +118,7 @@ contract TrackRightsRegistry is AccessControl {
             t.exists = true;
         }
         t.metadataHash = metadataHash;
-        t.payeeCount = uint8(n);
+        t.payeeCount = n.toUint8();
 
         // Clear previous fixed slots (overwrite-safe)
         for (uint256 i = 0; i < MAX_PAYEES; i++) {

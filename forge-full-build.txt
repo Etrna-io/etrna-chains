@@ -1,0 +1,12 @@
+Compiling 200 files with Solc 0.8.24
+Solc 0.8.24 finished in 482.35s
+forge : Error: Compiler run failed:
+At line:1 char:1
++ forge build 2>&1 | Out-String -Width 500 | Set-Content forge-full-bui ...
++ ~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Error: Compiler run failed::String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+Error: Yul exception:Variable _4 is 1 too deep in the stack [ JUNK var_i memPtr_11 _4 _192 _2 _184 _186 _188 _185 _3 _187 expr_12 _196 _203 _202 _200 _204 _201 _198 ]
+memoryguard was present.
+
